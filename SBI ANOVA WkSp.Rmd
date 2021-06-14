@@ -1,0 +1,508 @@
+---
+title: "Simulation-based inference with R for ANOVA design experiments"
+author: V.N. Vimal Rao
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction to the Workshop
+
+This notebook contains code to execute simulation-based inference (SBI) for four different experimental designs: 
+
+- One-way ANOVA
+- One-way ANCOVA 
+- Two-way ANOVA
+- Repeated Measures ANOVA
+
+The goal of SBI is to generate via simulation the sampling distributions of a given sample statistic under a candidate hypothesis or specific data generating process. 
+
+The following R packages will be used: 
+```{r, echo=TRUE, message=FALSE, warning=FALSE}
+library(tidyverse) 
+library(mosaic)
+library(car)
+```
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+library(DiagrammeR)
+```
+
+
+Note that the tidyverse includes several commonly used R packages, namely: ggplot2, dplyr, tidyr, readr, purrr, tibble, stringr, forcats, and their dependencies (e.g., magrittr). 
+
+To ensure that your simulation results will be the same as those in this document, set the following random seed: 
+```{r}
+set.seed(616919668)
+```
+
+
+# Introduction to ANOVA
+
+The main purpose of the ANOVA model is to determine whether there are any distinguishable differences between groups, with regards to the mean value of some quantitative response variable. In one-way ANOVA, we consider only one explanatory grouping variable in our analyses. In two-way ANOVA, there are two such variables. In ANCOVA, a quantitative explanatory variable is added to the model. In repeated measures ANOVA, the same participants are observed longitudinally, and time is treated as a factor in the model. 
+
+## Design Diagrams 
+
+The first step is to conducting an analysis for an ANOVA based experiment to specify the data generating process. Specifically, one must identify the random sources of variation, the experimental sources of variation, and sources of random error such as individual differences. It is also important to consider the possible effect of confounding variables and collider variables when analyzing experimental data, but these are typically considerations made during the design stages of the experiment. 
+
+## Random Processes
+
+There are generally two options for random processes that we might model: a random sampling process, or a random allocation process. We mimic random sampling processes using a strategy called bootstrap resampling. Bootstrap resampling uses information from the sample to mimic selecting new samples from a reconstructed population of interest. 
+
+Here, we instead focus on experiments, specifically those that utilize some form of random allocation in order to support a causal interpretation of the data. The following examples will discuss how to model simple randomization, block randomization, and even more advanced randomization strategies that are common to psychological experiments employing ANOVA-based designs.
+
+# Introduction to the Data
+
+This workshop will utilize data from Running et al. (2021)^[Running, K., Codding, R.S., Rao, V.N.V., Goodridge, A., Kromminga, K.R., Will, K., Sullivan, M., & Varma, S. (2021, February). Determining effective fraction instruction sequences [Poster presentation]. Annual Meeting of the National Association of School Psychologists, Salt Lake City, Utah.] that conducted a class-wide fraction intervention with 114 fourth-grade students. The experimental condition was the fraction instruction sequence (i.e., concepts-first, iterative, or control). The main response variable is students' scores on a 10-item assessment of their conceptual understanding of the standard notion of math models, completed after the completion of 12 lessons about fractions within their assigned fraction instruction sequence.  
+
+The data set that we will use has eight variables from the original study: 
+
+- studentID: Unique ID for each of the 114 students who participated in the study
+- siteID: Unique ID for each of the two schools from which students were recruited
+- classID: Unique ID for each of the five classrooms across both schools from which students were recruited
+- blockID: Unique ID for each randomization block. Within each classroom, students were split into thirds based on the total score of all four procedural and conceptual assessments at pre-testing. Within each of these randomization blocks, students were randomly allocated to one of the three experimental conditions. 
+- condition: The main explanatory variable of the study. The experimental condition was the fraction instructional sequence students were exposed to for each of the 12 intervention sessions, i.e., concepts-first, iterative, or control. 
+- mcap: The fourth grade AIMSweb Mathematics Concepts and Applications (MCAP) is an 8-minute 30 item test that assesses general mathematics concepts and applications (e.g., number sense, operations, patterns and relationships, measurement, geometry, data and
+probability; Shinn, 2004^[Shinn, M. R. (2004). Administration and scoring of mathematics computation curriculum-based measurement (M-CBM) and math fact probes for use with AIMSweb. Eden Praire, MN: Edformation.]).
+- conceptsubscore_pre: Score out of 20 at pre-testing on the 10-item assessment of their conceptual understanding of the standard notion of math models.
+- conceptsubscore_post: The main response variable in this exercise. Score out of 20 at post-testing on the 10-item assessment of their conceptual understanding of the standard notion of math models.
+
+Read in the dataset: 
+```{r}
+fraction.intervention <- read.csv(file="https://raw.githubusercontent.com/RaoVNV/R-SBI-ANOVA/main/Running-et-al-2021_data-extract.csv")
+```
+
+```{r, include=FALSE}
+names(fraction.intervention)[1]="studentID"
+```
+
+
+Inspect the data frame:
+```{r}
+names(fraction.intervention)
+head(fraction.intervention)
+tail(fraction.intervention)
+summary(fraction.intervention)
+```
+
+# One-way ANOVA
+
+We begin our analysis with a simplification of the study's design to demonstrate an example of an analysis for one-way ANOVA designs: 114 fourth grade students were recruited and randomly allocated to one of the three experimental conditions. At the end of the study, their conceptual understanding of standard notation of math models was measured. 
+
+Our question is whether there were any differences in the effect of the experimental condition on students' conceptual understanding. There are generally two approaches we could take to answer this question. One is estimation, in which we might seek to estimate the causal effect of instructional sequence on students' post-test scores. Here, we'll considering the other approach, testing. With testing, we hypothesize a data generating process (dgp), and then test the hypothesized dgp against the data. 
+
+## Study Design Diagram 
+
+In order to specify a dgp, let's consider the simplified study design.
+
+```{r, echo=FALSE}
+DiagrammeR::grViz("
+  digraph graph1 {
+  
+  graph [layout = dot, rankdir = LR]
+  
+  # node definitions with substituted label text
+  node [shape = oval]
+  pop [label = '@@1']
+  sample [label = '@@2']
+  control [label = '@@3']
+  confirst [label = '@@4']
+  iter [label = '@@5']
+  post1 [label = '@@6']
+  post2 [label = '@@7']
+  post3 [label = '@@8']
+  
+  pop -> sample
+  sample -> control -> post1
+  sample -> confirst -> post2
+  sample -> iter -> post3
+  }
+  
+  [1]: 'Population of fourth graders'
+  [2]: '114 recruited participants'
+  [3]: 'control condition (n=38)'
+  [4]: 'concepts-first condition (n=38)'
+  [5]: 'iterative condition (n=38)'
+  [6]: 'post-test measurement'
+  [7]: 'post-test measurement'
+  [8]: 'post-test measurement'
+  ")
+```
+We always start with the population of interest, defined by the specification of inclusion/exclusion criteria. In this case, our population of interest was fourth graders^[for more about the study's inclusion/exclusion criteria as well as the recruitment strategy employed, see Running et al. (2021).]. 
+
+From this population, 114 students were recruited. It is important to note that this is not a random probability sample, but what we might call a convenience sample. 
+
+Each of these 114 students were then randomly allocated to one of three experimental conditions, and then given 12 instructional interventions. 
+
+After the 12 sections, each student then completed the post-test. 
+
+## Hypothesized Data Generating Process
+
+There are many dgps that we might hypothesis and thus subsequently test. When hypothesizing a dgp, consider tracking a single participant through the design diagram, and highlighting all of the factors that may affect their post-test score. 
+
+In this case, an individuals background knowledge, skills, and abilities may affect their scores, or perhaps their exposure to one of the three instructional interventions may affect their scores. 
+
+A traditional nil-effect null hypothesis would suppose that there is no difference in the effects of the three experimental conditions, and that the post-test scores students achieved are what they would have achieved no matter which condition they were assigned to. This hypothesis thus specifies a testable dgp -- individuals' post-test scores are not a function of the experimental condition. 
+
+## Generating a Sampling Distribution
+
+Based on this dgp, we acknowledge that the differences in the average post-test score by group may vary simply due to the random allocation process that assigns individuals to groups. If we were to re-do the study, and employ the random allocation process, a participant may be assigned to a different group. However, under the hypothesized dgp, their post-test score would be the same as originally observed, as there is no difference in the effect of experimental condition on post-test scores. How can we summarize *how* different the groups' means are from eachother? The ANOVA F-statistic is one such choice, which is what we will use here. 
+
+First, let's compute the statistic for the observed study results. We fit a model relating the response and explanatory variables with the `lm` function, and then use the `Anova` function from the `{car}` package to calculate and then extract the *F* value. 
+
+```{r}
+obs.anova.mdl <- lm(data=fraction.intervention, conceptsubscore_post ~ condition)
+Anova(obs.anova.mdl, type="III")
+```
+The key *F* statistic from the table is in the second row. We can extract that number using the `$'F value'[2]` operator, and store it as a constant `obsF`. 
+
+```{r}
+obs.anova.mdl <- lm(data=fraction.intervention, conceptsubscore_post ~ condition)
+obsF <- Anova(obs.anova.mdl, type="III")$'F value'[2]
+obsF
+```
+
+To obtain a sampling distribution for the *F* statistic based on this hypothesized dgp, we will simulate re-doing the study by *shuffling* the random allocation of participants into groups. The `shuffle` function from the `{mosaic}` package achieves exactly this: it reallocates participants to groups. 
+
+First, let's see the code for one such reallocation. We use the same syntax as we did to obtain the *F* statistic for the observed study results, with one small modification - we need to *shuffle* the `condition` variable. 
+
+```{r}
+sim.anova.mdl <- lm(data=fraction.intervention, conceptsubscore_post ~ shuffle(condition))
+Anova(sim.anova.mdl, type="III")$'F value'[2]
+```
+This code represents one simulated sample from our hypothesized dgp, which captures one possible way in which the 114 participants might be randomly allocated into three groups, the instructional sequence has no differential effect, and students' understanding is measured with a post-test. To precisely form our expectations of possible outcomes for the *F* statistic based on this hypothesized dgp (i.e., no different effect of instructional sequence), we can use simulation to generate many such samples. To do this, we will use the `do` function from the `{mosaic}` package. We will then store the *F* statistics of each of these reallocations in a new vector. 
+
+First, we will condense the extraction of the *F* statistic to one line of code: 
+```{r}
+Anova(lm(data=fraction.intervention, conceptsubscore_post ~ shuffle(condition)), type="III")$'F value'[2]
+```
+And now, let us collect 10,000 such reallocations, by adding `do(10000)` to the previous line of code and storing the 10,000 *F* statistics in a vector called `simulatedF`. 
+```{r}
+simulatedF <- do(10000)*Anova(lm(data=fraction.intervention, conceptsubscore_post ~ shuffle(condition)), type="III")$'F value'[2]
+```
+
+Let's examine the distribution of *F* statistics based on this simulation:
+```{r}
+gf_histogram(data = simulatedF, ~ result)
+```
+
+## Extracting a *p*-value
+
+Now, we must compare our study's observed *F* statistic to this sampling distribution. Recall that the F distribution is a right-skewed distribution, and thus to extract a *p* value, we want to know the proportion of simulated trials for which the *F* statistic is greater than the observed study's *F* statistic. We can do this with the `prop` function from the `{mosaic}` package. 
+
+```{r}
+count( ~ result >= obsF, data = simulatedF)
+prop( ~ result >= obsF, data = simulatedF)
+gf_histogram(data = simulatedF, ~ result, fill = ~ (result >= obsF))
+```
+
+It is important to note that the precision of the simulation-based *p*-value is a function of the number of trials simulated. A common recommended minimum threshold is 10,000. 
+
+# One-way ANCOVA
+
+The one way ANCOVA model extends the one way ANOVA model by including a quantitative covariate in the model. In this case, whole number knowledge, as measured by the MCAP, is likely a covariate of fraction conceptual understanding. 
+
+Therefore, we can revise our original question to be as follows: whether there were any differences in the effect of the experimental condition on students' conceptual understanding, after controlling for their whole number knowledge. Once more, we'll consider the design diagram and then specify a hypothetical dgp to test against our data. 
+
+## Study Design Diagram and Hypothesized Data Generating Process
+
+In order to specify a dgp, let's consider the modification to the simplified study design^[Recall that design diagrams should be specified at the onset of a study. For instructional purposes only do we consider them here a posteriori.].
+
+```{r, echo=FALSE}
+DiagrammeR::grViz("
+  digraph graph1 {
+  
+  graph [layout = dot, rankdir = LR]
+  
+  # node definitions with substituted label text
+  node [shape = oval]
+  pop [label = '@@1']
+  sample [label = '@@2']
+  wn [label = '@@9']
+  control [label = '@@3']
+  confirst [label = '@@4']
+  iter [label = '@@5']
+  post1 [label = '@@6']
+  post2 [label = '@@7']
+  post3 [label = '@@8']
+  
+  pop -> sample -> wn
+  wn -> control -> post1
+  wn -> confirst -> post2
+  wn -> iter -> post3
+  }
+  
+  [1]: 'Population of fourth graders'
+  [2]: '114 recruited participants'
+  [3]: 'control condition (n=38)'
+  [4]: 'concepts-first condition (n=38)'
+  [5]: 'iterative condition (n=38)'
+  [6]: 'post-test measurement'
+  [7]: 'post-test measurement'
+  [8]: 'post-test measurement'
+  [9]: 'whole-number knowledge measurement'
+  ")
+```
+
+Our inclusion of whole number knowledge enters the diagram *before* students were exposed to the different instructional treatments. Once more, we specify the population of interest, the sampling strategy, the allocation into the conditions, and the post-test measurement. 
+
+Previously, we considered the individual variability in the development of a conceptual understanding of fractions and the exposure to one of the three instructional interventions as sources of variation that may affect their scores. Now, we must also consider each students' whole number knowledge, which is independent of the individual variability in the development of conceptual understanding. Consider two students both scoring a 78% on the MCAP and both assigned to the iterative condition - we might still expect that they achieve different scores on the post-test. This is the individual variability we include in the model. As before, each instructional sequence might have a different effect on post-test scores, and now, we might expect two students in the same instructional condition but with different MCAP scores to achieve different scores on their post-test, as MCAP scores may be related, i.e., co-vary, with post-test scores. 
+
+Our research question is not about testing whether there is a relationship between MCAP scores and the post-test score, but rather, after controlling for variation in MCAP scores, whether instructional sequences have a differential effect on post-test scores. 
+
+The traditional nil-effect null hypothesis would again suppose that there is no difference in the effects of the three experimental conditions, and that the post-test scores students achieved are what they would have achieved no matter which condition they were assigned to. This hypothesis, as we have seen, specifies a testable dgp -- individuals' post-test scores are not a function of the experimental condition. 
+
+## Generating a Sampling Distribution and Extracting a *p*-value
+
+Based on this dgp, we acknowledge that the differences in the average post-test score by group may vary simply due to the random allocation process that assigns individuals to groups and those individuals' MCAP scores. If we were to re-do the study, and employ the random allocation process, a participant may be assigned to a different group. However, under the hypothesized dgp, their post-test score would be the same as originally observed (as would their MCAP score), as there is no difference in the effect of experimental condition on post-test scores. We will again use the ANOVA F-statistic to summarize the magnitude of these differences between groups. 
+
+First, let's compute the statistic for the observed study results, this time including MCAP as a covariate. 
+
+```{r}
+obs.ancova.mdl <- lm(data=fraction.intervention, conceptsubscore_post ~ mcap + condition)
+Anova(obs.ancova.mdl, type="III")
+```
+
+We see that the key *F* statistic is in the third row. Now, let's extract that value, and store it as a constant. 
+
+```{r}
+obs.c.F <- Anova(obs.ancova.mdl, type="III")$'F value'[3]
+obs.c.F
+```
+And now, let us shuffle the experimental condition and collect 10,000 simulated reallocations. 
+```{r}
+simulated.c.F <- do(10000)*Anova(lm(data=fraction.intervention, conceptsubscore_post ~ mcap + shuffle(condition)), type="III")$'F value'[3]
+```
+
+Let's examine the distribution of *F* statistics based on this simulation:
+```{r}
+gf_histogram(data = simulated.c.F, ~ result)
+```
+
+We again extract a *p*-value using the `prop` function from the `{mosaic}` package. 
+
+```{r}
+count( ~ result >= obs.c.F, data = simulated.c.F)
+prop( ~ result >= obs.c.F, data = simulated.c.F)
+gf_histogram(data = simulated.c.F, ~ result, fill = ~ (result >= obs.c.F))
+```
+
+# One-way ANCOVA with Block Randomization
+
+We have seen how to incorporate a covariate into the model, but now we shall also add in extra features of the study design. Let's start with block randomization. 
+
+Block randomization is a study design in which participants are grouped into blocks or clusters, usually naturally based on the method of recruitment. Within each block, participants are randomly assigned to one of the experimental conditions. However, there is also a further limitation that the sample size of each condition across all blocks should be equivalent. 
+
+In the example of Running et al. (2021), there were 5 classrooms of 23, 26, 25, 21, and 19 students each. These classrooms constitute a natural cluster or block. Within each classroom, students were randomized into one of the three experimental conditions. Let's add this feature of the study design into our diagram: 
+
+```{r, echo=FALSE}
+DiagrammeR::grViz("
+  digraph graph1 {
+  
+  graph [layout = dot, rankdir = LR]
+  
+  # node definitions with substituted label text
+  node [shape = oval]
+  pop [label = '@@1']
+  sample [label = '@@2']
+  pre [label = '@@9']
+  control1 [label = '@@3']
+  confirst1 [label = '@@4']
+  iter1 [label = '@@5']
+  post11 [label = '@@6']
+  post12 [label = '@@7']
+  post13 [label = '@@8']
+  class1 [label = '@@10']
+  class2 [label = '@@11']
+  class3 [label = '@@12']
+  class4 [label = '@@13']
+  class5 [label = '@@14']
+  control2 [label = '@@15']
+  confirst2 [label = '@@16']
+  iter2 [label = '@@17']
+  post21 [label = '@@18']
+  post22 [label = '@@19']
+  post23 [label = '@@20']
+    control3 [label = '@@21']
+  confirst3 [label = '@@22']
+  iter3 [label = '@@23']
+  post31 [label = '@@24']
+  post32 [label = '@@25']
+  post33 [label = '@@26']
+    control4 [label = '@@27']
+  confirst4 [label = '@@28']
+  iter4 [label = '@@29']
+  post41 [label = '@@30']
+  post42 [label = '@@31']
+  post43 [label = '@@32']
+    control5 [label = '@@33']
+  confirst5 [label = '@@34']
+  iter5 [label = '@@35']
+  post51 [label = '@@36']
+  post52 [label = '@@37']
+  post53 [label = '@@38']
+  
+  pop->sample -> pre
+  pre -> class1
+  pre -> class2
+  pre -> class3
+  pre -> class4
+  pre -> class5
+  class1 -> control1 -> post11
+  class1 -> confirst1 -> post12
+  class1 -> iter1 -> post13
+    class2 -> control2 -> post21
+  class2 -> confirst2 -> post22
+  class2 -> iter2 -> post23
+    class3 -> control3 -> post31
+  class3 -> confirst3 -> post32
+  class3 -> iter3 -> post33
+    class4 -> control4 -> post41
+  class4 -> confirst4 -> post42
+  class4 -> iter4 -> post43
+    class5 -> control5 -> post51
+  class5 -> confirst5 -> post52
+  class5 -> iter5 -> post53
+  }
+  
+  [1]: 'Population of fourth graders'
+  [2]: '114 recruited participants'
+  [3]: 'control condition'
+  [4]: 'concepts-first condition'
+  [5]: 'iterative condition'
+  [6]: 'post-test measurement'
+  [7]: 'post-test measurement'
+  [8]: 'post-test measurement'
+  [9]: 'whole-number knowledge measurement'
+  [10]: 'class 1'
+  [11]: 'class 2'
+  [12]: 'class 3'
+  [13]: 'class 4'
+  [14]: 'class 5'
+  [15]: 'control condition'
+  [16]: 'concepts-first condition'
+  [17]: 'iterative condition'
+  [18]: 'post-test measurement'
+  [19]: 'post-test measurement'
+  [20]: 'post-test measurement'
+  [21]: 'control condition'
+  [22]: 'concepts-first condition'
+  [23]: 'iterative condition'
+  [24]: 'post-test measurement'
+  [25]: 'post-test measurement'
+  [26]: 'post-test measurement'
+  [27]: 'control condition'
+  [28]: 'concepts-first condition'
+  [29]: 'iterative condition'
+  [30]: 'post-test measurement'
+  [31]: 'post-test measurement'
+  [32]: 'post-test measurement'
+  [33]: 'control condition'
+  [34]: 'concepts-first condition'
+  [35]: 'iterative condition'
+  [36]: 'post-test measurement'
+  [37]: 'post-test measurement'
+  [38]: 'post-test measurement'
+  
+  ")
+```
+
+While there are more branches to the design diagram as a whole, each class's branch looks essentially the same as the one-way ANCOVA example with simple randomization. They key difference is that when specifying our (null) hypothesized data generating process, we can't simply *shuffle* everyone's assigned condition all at once, the shuffling has to occur within each individual classroom. 
+
+The syntax to achieve this within-group shuffling is conveniently named `groups`. We simply specify the variable that has the distinct group IDs that were used to achieve the block randomization, and then follow the rest of the steps as before. 
+
+```{r}
+simulated.c.b.F <- do(10000)*Anova(lm(data=fraction.intervention, conceptsubscore_post ~ mcap + shuffle(condition, groups=classID)), type="III")$'F value'[3]
+```
+
+Let's examine the distribution of *F* statistics based on this simulation:
+```{r}
+gf_histogram(data = simulated.c.b.F, ~ result)
+```
+
+We again extract a *p*-value using the `prop` function from the `{mosaic}` package. 
+
+```{r}
+count( ~ result >= obs.c.F, data = simulated.c.b.F)
+prop( ~ result >= obs.c.F, data = simulated.c.b.F)
+gf_histogram(data = simulated.c.b.F, ~ result, fill = ~ (result >= obs.c.F))
+```
+
+
+# Repeated Measures ANOVA
+
+The repeated measures ANOVA model extends the one way ANOVA model by including a time component in the model. In this case, fraction conceptual understanding was measured both at pre-test and at post-test using the same assessment. However, pre-test scores were assessed *prior* to the randomization, and thus this does not qualify as a traditional repeated measures analysis. Rather, pre-test scores are simply an additional covariate that can be included in the model. 
+
+The study as originally planned not only included a post-test at the end of the intervention, i.e., the proximal assessment, but also another distal assessment six weeks subsequent to the completion of the intervention. Had both the proximal and distal measurements been taken, both would have been subject to the potential differential effects of the instructional sequence, and thus would constitute a traditional repeated measures design.  
+Let us consider how we might have revised our original question in this case: whether there were any differences in the effect of the experimental condition on the longitudinal changes in students' conceptual understanding.  
+
+In order to specify a dgp, let's consider the longitudinal modification to the simplified study design: 
+```{r, echo=FALSE}
+DiagrammeR::grViz("
+  digraph graph1 {
+  
+  graph [layout = dot, rankdir = LR]
+  
+  # node definitions with substituted label text
+  node [shape = oval]
+  pop [label = '@@1']
+  sample [label = '@@2']
+  control [label = '@@3']
+  confirst [label = '@@4']
+  iter [label = '@@5']
+  post1 [label = '@@6']
+  post2 [label = '@@7']
+  post3 [label = '@@8']
+  distal1 [label = '@@9']
+  distal2 [label = '@@10']
+  distal3 [label = '@@11']
+  
+  pop -> sample
+  sample -> control -> post1 -> distal1
+  sample -> confirst -> post2 -> distal2
+  sample -> iter -> post3 -> distal3
+  }
+  
+  [1]: 'Population of fourth graders'
+  [2]: '114 recruited participants'
+  [3]: 'control condition (n=38)'
+  [4]: 'concepts-first condition (n=38)'
+  [5]: 'iterative condition (n=38)'
+  [6]: 'proximal outcome measurement'
+  [7]: 'proximal outcome measurement'
+  [8]: 'proximal outcome measurement'
+  [9]: 'distal outcome measurement'
+  [10]: 'distal outcome measurement'
+  [11]: 'distal outcome measurement'
+  ")
+```
+
+When there are more than two time points, we must do two things. First, we must reformat the data so that there is one row in our data set per person per time point. This is because in repeated measures ANOVA, we will treat `time` as a factor in the model, much in the same way we might treat any other factor. Together with `condition`, the repeated measures ANOVA essentially becomes a two-way ANOVA. However, we will only be shuffling `condition`, ensuring that an individual's scores at each time point stay associated with each other. 
+
+Although there is no data for multiple distal outcomes for this context, here is an example of R syntax for how this strategy might be effected. First, we must reformat the data. This is easily achieved using the `gather` function from the `{tidyr}` package. Use a `:` to indicate each of the columns in which the measurements are stored in the wide format. 
+
+First, let's remind ourselves what the data looks like in the wide format by inspecting the students with IDs between 101 and 105. 
+```{r, echo=FALSE}
+head(fraction.intervention %>% arrange(studentID), 5)
+```
+
+Now, let's convert this to long format so that there is one row per student per measurement, and a new `time` variable that is either `pre` or `post` and a new `score` variable that has their score.
+```{r}
+long.fi <- gather(fraction.intervention, time, score, conceptsubscore_pre:conceptsubscore_post)
+```
+```{r, echo=FALSE}
+head(long.fi %>% arrange(studentID), 10)
+```
+
+With the data in long form, we can now shuffle `condition`. The basic code will look like this:
+```{r}
+lm(data = long.fi, score ~ shuffle(condition) + time)
+```
+We could also add covariates to this model, such as MCAP and pretest scores. Simply pay close attention to what needs to be shuffled and how to accomplish that shuffling. 
+
+
+
+
+
+
